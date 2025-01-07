@@ -52,6 +52,31 @@ namespace SharpSCCM
                 // Subcommands
                 //
 
+                // deobfuscate command
+                var deobCommand = new Command("deob", "Deobfuscate a policy secret hex string");
+                rootCommand.Add(deobCommand);
+                deobCommand.Add(new Argument<string>("secret-string", "The policy secret hex string to deobfuscate"));
+                deobCommand.Handler = CommandHandler.Create(
+                    (string secretString) =>
+                    {
+                        try
+                        {
+                            bool bDecryptSuccess = Helpers.DecryptDESSecret(secretString, out string deobfuscatedString);
+                            if (bDecryptSuccess)
+                            {
+                                Console.WriteLine($"[+] Deobfuscated secret: {deobfuscatedString}");
+                            }
+                            else
+                            {
+                                Console.WriteLine("[!] Could not deobuscate secret!");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[!] Could not deobuscate secret: {ex.Message}");
+                        }
+                    });
+
                 // exec command
                 var execCommand = new Command("exec", "Execute a command, binary, or script on a client or request NTLM authentication from a client\n" +
                     "  Permitted security roles:\n" +
@@ -72,8 +97,9 @@ namespace SharpSCCM
                 execCommand.Add(new Option<string>(new[] { "--site-code", "-sc" }, "The three character site code (e.g., \"PS1\") (default: the site code of the client running SharpSCCM)"));
                 execCommand.Add(new Option<string>(new[] { "--sms-provider", "-sms" }, "The IP address, FQDN, or NetBIOS name of the SMS Provider to connect to (default: the current management point of the client running SharpSCCM)"));
                 execCommand.Add(new Option<int>(new[] { "--wait-time", "-w" }, () => 300, "The time (in seconds) to wait for the deployment to execute before cleaning up (default: 300)"));
+                execCommand.Add(new Option<string>(new[] { "--working-dir", "-dir" }, "The working directory to execute a command, binary, or script from"));
                 execCommand.Handler = CommandHandler.Create(
-                    (string device, string collectionId, string collectionName, string path, string relayServer, string resourceId, bool runAsSystem, string collectionType, string user, int waitTime, string smsProvider, string siteCode) =>
+                    (string device, string collectionId, string collectionName, string path, string workingDir, string relayServer, string resourceId, bool runAsSystem, string collectionType, string user, int waitTime, string smsProvider, string siteCode) =>
                     {
                         if (!string.IsNullOrEmpty(relayServer) && !string.IsNullOrEmpty(path) || (string.IsNullOrEmpty(relayServer) && string.IsNullOrEmpty(path)))
                         {
@@ -92,7 +118,7 @@ namespace SharpSCCM
                             ManagementScope wmiConnection = MgmtUtil.NewWmiConnection(smsProvider, null, siteCode);
                             if (wmiConnection != null && wmiConnection.IsConnected)
                             {
-                                SmsProviderWmi.Exec(wmiConnection, collectionId, collectionName, device, path, relayServer, resourceId, !runAsSystem, collectionType, user, waitTime);
+                                SmsProviderWmi.Exec(wmiConnection, collectionId, collectionName, device, path, workingDir, relayServer, resourceId, !runAsSystem, collectionType, user, waitTime);
                             }
                         }
                     });
@@ -101,6 +127,42 @@ namespace SharpSCCM
                 var getCommand = new Command("get", "A group of commands that fetch objects from SMS Providers via WMI, management points via HTTP(S), or domain controllers via LDAP");
                 rootCommand.Add(getCommand);
                 getCommand.AddGlobalOption(new Option<string>(new[] { "--site-code", "-sc" }, "The three character site code (e.g., PS1) (default: the site code of the client running SharpSCCM)"));
+
+                // get admins
+                var getAdmins = new Command("admins", "Get information on SCCM administrators and security roles from an SMS Provider via WMI\n" +
+                    "  Permitted security roles:\n" +
+                    "    - Any (SMS Admins local group)");
+                getCommand.Add(getAdmins);
+                getAdmins.Add(new Option<bool>(new[] { "--count", "-c" }, "Returns the number of rows that match the specified criteria"));
+                getAdmins.Add(new Option<string>(new[] { "--id", "-i" }, "A string to search for in collection CollectionIDs (returns all collections where the CollectionID contains the provided string)"));
+                getAdmins.Add(new Option<string>(new[] { "--name", "-n" }, "A string to search for in collection names (returns all collections where the collections name contains the provided string)"));
+                getAdmins.Add(new Option<string>(new[] { "--order-by", "-o" }, "An ORDER BY clause to set the order of data returned by the query (e.g., \"Name DESC\") (default: ascending (ASC) order)"));
+                getAdmins.Add(new Option<string[]>(new[] { "--properties", "-p" }, "Specify this option for each property to query (e.g., \"-p Name -p MemberCount\"") { Arity = ArgumentArity.OneOrMore });
+                getAdmins.Add(new Option<string>(new[] { "--sms-provider", "-sms" }, "The IP address, FQDN, or NetBIOS name of the SMS Provider to connect to (default: the current management point of the client running SharpSCCM)"));
+                getAdmins.Add(new Option<bool>(new[] { "--verbose", "-v" }, "Display all class properties and their values"));
+                getAdmins.Add(new Option<string>(new[] { "--where-condition", "-w" }, "A WHERE condition to narrow the scope of data returned by the query (e.g., \"Name='collection0'\" or \"Name LIKE '%collection%'\")"));
+                getAdmins.Add(new Option<bool>(new[] { "--dry-run", "-z" }, "Display the resulting WQL query but do not connect to the specified server and execute it"));
+                getAdmins.Handler = CommandHandler.Create(
+                    (string smsProvider, string siteCode, bool count, string id, string name, string orderBy, string[] properties, bool verbose, string whereCondition, bool dryRun) =>
+                    {
+                        if (!string.IsNullOrEmpty(id))
+                        {
+                            whereCondition = $"AdminID LIKE '%{id}%'";
+                        }
+                        else if (!string.IsNullOrEmpty(name))
+                        {
+                            whereCondition = $"LogonName LIKE '%{name}%'";
+                        }
+                        if (properties.Length == 0 && !verbose)
+                        {
+                            properties = new[] { "AdminID", "AdminSid", "DisplayName", "LogonName", "RoleNames", "SourceSite" };
+                        }
+                        ManagementScope wmiConnection = MgmtUtil.NewWmiConnection(smsProvider, null, siteCode);
+                        if (wmiConnection != null && wmiConnection.IsConnected)
+                        {
+                            MgmtUtil.GetClassInstances(wmiConnection, "SMS_Admin", null, count, properties, whereCondition, orderBy, dryRun, verbose, printOutput: true);
+                        }
+                    });
 
                 // get applications
                 var getApplications = new Command("applications", "Get information on applications from an SMS Provider via WMI\n" +
@@ -603,6 +665,7 @@ namespace SharpSCCM
                  
                 // invoke
                 var invokeCommand = new Command("invoke", "A group of commands that execute actions on an SMS Provider");
+                invokeCommand.AddGlobalOption(new Option<string>(new[] { "--management-point", "-mp" }, "The IP address, FQDN, or NetBIOS name of the management point to connect to (default: the current management point of the client running SharpSCCM)"));
                 invokeCommand.AddGlobalOption(new Option<string>(new[] { "--sms-provider", "-sms" }, "The IP address, FQDN, or NetBIOS name of the SMS Provider to connect to (default: the current management point of the client running SharpSCCM)"));
                 invokeCommand.AddGlobalOption(new Option<string>(new[] { "--site-code", "-sc" }, "The three character site code (e.g., \"PS1\") (default: the site code of the client running SharpSCCM)"));
                 rootCommand.Add(invokeCommand);
@@ -682,21 +745,21 @@ namespace SharpSCCM
                 invokeClientPush.Add(new Option<string>(new[] { "--client-id", "-i" }, "The SMS client GUID to use that corresponds to a previously registered device and certificate"));
                 invokeClientPush.Add(new Option<string>(new[] { "--target", "-t" }, "The NetBIOS name, IP address, or if WebClient is enabled on the site server, the IP address and port (e.g., \"192.168.1.1@8080\") of the relay/capture server (default: the machine running SharpSCCM)"));
                 invokeClientPush.Handler = CommandHandler.Create(
-                    (string smsProvider, string siteCode, bool asAdmin, string certificate, string clientId, string target) =>
+                    (string managementPoint, string smsProvider, string siteCode, bool asAdmin, string certificate, string clientId, string target) =>
                     {
-                        if (smsProvider == null || siteCode == null)
+                        if (managementPoint == null || siteCode == null)
                         {
-                            (smsProvider, siteCode) = ClientWmi.GetCurrentManagementPointAndSiteCode();
+                            (managementPoint, siteCode) = ClientWmi.GetCurrentManagementPointAndSiteCode();
                         }
-                        if (!string.IsNullOrEmpty(smsProvider) && !string.IsNullOrEmpty(siteCode))
+                        if (!string.IsNullOrEmpty(managementPoint) && !string.IsNullOrEmpty(siteCode))
                         {
                             if (!asAdmin)
                             {
                                 // Use certificate of existing device if provided
                                 if (!string.IsNullOrEmpty(certificate) && !string.IsNullOrEmpty(clientId))
                                 {
-                                    (MessageCertificateX509 signingCertificate, _, SmsClientId smsClientId) = MgmtPointMessaging.GetCertsAndClientId(smsProvider, siteCode, certificate, clientId);
-                                    MgmtPointMessaging.SendDDR(signingCertificate, target, smsProvider, siteCode, smsClientId);
+                                    (MessageCertificateX509 signingCertificate, _, SmsClientId smsClientId) = MgmtPointMessaging.GetCertsAndClientId(managementPoint, siteCode, certificate, clientId);
+                                    MgmtPointMessaging.SendDDR(signingCertificate, target, managementPoint, siteCode, smsClientId);
                                 }
                                 else if (!string.IsNullOrEmpty(certificate) && string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(certificate) && !string.IsNullOrEmpty(clientId))
                                 {
@@ -706,14 +769,18 @@ namespace SharpSCCM
                                 else
                                 {
                                     MessageCertificateX509 signingCertificate = MgmtPointMessaging.CreateUserCertificate();
-                                    SmsClientId smsClientId = MgmtPointMessaging.RegisterClient(signingCertificate, target, smsProvider, siteCode);
-                                    MgmtPointMessaging.SendDDR(signingCertificate, target, smsProvider, siteCode, smsClientId);
+                                    SmsClientId smsClientId = MgmtPointMessaging.RegisterClient(signingCertificate, target, managementPoint, siteCode);
+                                    MgmtPointMessaging.SendDDR(signingCertificate, target, managementPoint, siteCode, smsClientId);
                                 }
                             }
                             else
                             {
                                 if (!string.IsNullOrEmpty(target))
                                 {
+                                    if (string.IsNullOrEmpty(smsProvider))
+                                    {
+                                        smsProvider = managementPoint;
+                                    }
                                     SmsProviderWmi.GenerateCCR(target, smsProvider, siteCode);
                                 }
                                 else
@@ -998,13 +1065,14 @@ namespace SharpSCCM
                 newApplication.Add(new Option<string>(new[] { "--path", "-p" }, "The local or UNC path of the binary/script the application will execute (e.g., \"C:\\Windows\\System32\\calc.exe\", \"\\\\site-server.domain.com\\Sources$\\my.exe") { IsRequired = true });
                 newApplication.Add(new Option<bool>(new[] { "--run-as-user", "-r" }, "Execute the application in the context of the logged on user (default: SYSTEM)"));
                 newApplication.Add(new Option<bool>(new[] { "--show", "-s" }, "Show the application in the Configuration Manager console (default: hidden)"));
+                newApplication.Add(new Option<string>(new[] { "--working-dir", "-dir" }, "The working directory to execute a command, binary, or script from"));
                 newApplication.Handler = CommandHandler.Create(
-                    (string smsProvider, string siteCode, string name, string path, bool runAsUser, bool show) =>
+                    (string smsProvider, string siteCode, string name, string path, string workingDir, bool runAsUser, bool show) =>
                     {
                         ManagementScope wmiConnection = MgmtUtil.NewWmiConnection(smsProvider, null, siteCode);
                         if (wmiConnection != null && wmiConnection.IsConnected)
                         {
-                            SmsProviderWmi.NewApplication(wmiConnection, name, path, runAsUser, show);
+                            SmsProviderWmi.NewApplication(wmiConnection, name, path, workingDir, runAsUser, show);
                         }
                     });
 
